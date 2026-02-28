@@ -1,0 +1,2 @@
+[console_scripts]
+devman-gen = devman_gen.cli:main
