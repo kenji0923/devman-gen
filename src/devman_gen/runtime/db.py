@@ -47,5 +47,10 @@ class OwnershipDB:
         self._conn.commit()
         return True
 
+    def release_all_by_owner(self, owner: str) -> int:
+        cur = self._conn.execute("DELETE FROM ownership WHERE owner = ?", (owner,))
+        self._conn.commit()
+        return int(cur.rowcount)
+
     def close(self) -> None:
         self._conn.close()

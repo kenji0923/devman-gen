@@ -5,12 +5,78 @@ import importlib
 import importlib.util
 import inspect
 from pathlib import Path
+import re
 
+from enum import Enum, IntEnum
+from typing import Any
 from .spec import BridgeFunctionSpec, BridgeSpec
+
+
+def _capture_types(module: Any, module_name: str) -> dict[str, dict[str, Any]]:
+    captured: dict[str, dict[str, Any]] = {}
+    for name, obj in inspect.getmembers(module):
+        if name.startswith("_"):
+            continue
+        if getattr(obj, "__module__", None) != module_name:
+            continue
+        if not inspect.isclass(obj):
+            continue
+        if issubclass(obj, IntEnum):
+            captured[name] = {"type": "IntEnum", "members": {m.name: m.value for m in obj}}
+        elif issubclass(obj, Enum):
+            captured[name] = {"type": "Enum", "members": {m.name: m.value for m in obj}}
+        else:
+            captured[name] = {"type": "Class"}
+    return captured
+
+
+_QUALIFIED_TYPE_RE = re.compile(r"\b([A-Za-z_]\w*(?:\.[A-Za-z_]\w+)+)\b")
+
+
+def _capture_referenced_types(
+    signatures: list[str],
+    module_name: str,
+    base_captured: dict[str, dict[str, Any]],
+) -> tuple[list[str], dict[str, dict[str, Any]]]:
+    extra_imports: set[str] = set()
+    captured = dict(base_captured)
+    seen: set[tuple[str, str]] = set()
+
+    for signature in signatures:
+        for qualified in _QUALIFIED_TYPE_RE.findall(signature):
+            module_path, _, type_name = qualified.rpartition(".")
+            if not module_path or not type_name:
+                continue
+            if module_path == module_name or module_path == "builtins":
+                continue
+            key = (module_path, type_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                type_module = importlib.import_module(module_path)
+                obj = getattr(type_module, type_name)
+            except Exception:
+                continue
+            if not inspect.isclass(obj):
+                continue
+            extra_imports.add(module_path)
+            if type_name in captured:
+                continue
+            if issubclass(obj, IntEnum):
+                captured[type_name] = {"type": "IntEnum", "members": {m.name: m.value for m in obj}}
+            elif issubclass(obj, Enum):
+                captured[type_name] = {"type": "Enum", "members": {m.name: m.value for m in obj}}
+            else:
+                captured[type_name] = {"type": "Class"}
+
+    return sorted(extra_imports), captured
 
 
 def _default_resource_template(sig: inspect.Signature) -> str | None:
     for param in sig.parameters.values():
+        if param.name in ("self", "cls"):
+            continue
         if param.kind in (
             inspect.Parameter.POSITIONAL_ONLY,
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
@@ -127,22 +193,75 @@ def build_spec_from_module(module_name: str) -> BridgeSpec:
     for name, obj in inspect.getmembers(module):
         if name.startswith("_"):
             continue
-        if not callable(obj):
-            continue
-        try:
-            sig = inspect.signature(obj)
-        except (ValueError, TypeError):
+        # Only capture members defined in this module
+        if getattr(obj, "__module__", None) != module_name:
             continue
 
-        functions.append(
-            BridgeFunctionSpec(
-                name=name,
-                signature=str(sig),
-                param_order=list(sig.parameters),
-                param_kinds={key: param.kind.name for key, param in sig.parameters.items()},
-                resource_template=_default_resource_template(sig),
+        if inspect.isclass(obj):
+            for m_name, m_obj in inspect.getmembers(obj):
+                if m_name.startswith("_"):
+                    continue
+                if not callable(m_obj):
+                    continue
+                try:
+                    sig = inspect.signature(m_obj)
+                except (ValueError, TypeError):
+                    continue
+
+                param_order = list(sig.parameters)
+                param_kinds = {key: param.kind.name for key, param in sig.parameters.items()}
+
+                if param_order and param_order[0] in ("self", "cls"):
+                    param_order = param_order[1:]
+                    param_kinds.pop("self", None)
+                    param_kinds.pop("cls", None)
+                    # Rebuild signature string without self/cls
+                    sig_params = [
+                        str(p) for p_name, p in sig.parameters.items()
+                        if p_name not in ("self", "cls")
+                    ]
+                    sig_str = f"({', '.join(sig_params)})"
+                else:
+                    sig_str = str(sig)
+
+                functions.append(
+                    BridgeFunctionSpec(
+                        name=f"{name}_{m_name}",
+                        signature=sig_str,
+                        param_order=param_order,
+                        param_kinds=param_kinds,
+                        resource_template=_default_resource_template(sig),
+                    )
+                )
+        elif callable(obj):
+            try:
+                sig = inspect.signature(obj)
+            except (ValueError, TypeError):
+                continue
+
+            functions.append(
+                BridgeFunctionSpec(
+                    name=name,
+                    signature=str(sig),
+                    param_order=list(sig.parameters),
+                    param_kinds={key: param.kind.name for key, param in sig.parameters.items()},
+                    resource_template=_default_resource_template(sig),
+                )
             )
-        )
 
     functions.sort(key=lambda fn: fn.name)
-    return BridgeSpec(module=module_name, functions=functions)
+
+    signatures = [fn.signature for fn in functions]
+    extra_imports, captured_types = _capture_referenced_types(
+        signatures=signatures,
+        module_name=module_name,
+        base_captured=_capture_types(module, module_name),
+    )
+
+    return BridgeSpec(
+        module=module_name,
+        functions=functions,
+        captured_types=captured_types,
+        extra_imports=extra_imports,
+        custom_client_code=None,
+    )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 from typing import Any
@@ -13,6 +13,8 @@ class BridgeFunctionSpec:
     param_order: list[str]
     param_kinds: dict[str, str]
     resource_template: str | None = None
+    dispatch: str | None = None
+    dispatch_target: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -21,6 +23,8 @@ class BridgeFunctionSpec:
             "param_order": self.param_order,
             "param_kinds": self.param_kinds,
             "resource_template": self.resource_template,
+            "dispatch": self.dispatch,
+            "dispatch_target": self.dispatch_target,
         }
 
     @classmethod
@@ -35,6 +39,8 @@ class BridgeFunctionSpec:
             param_order=param_order,
             param_kinds=param_kinds,
             resource_template=raw.get("resource_template"),
+            dispatch=str(raw["dispatch"]) if raw.get("dispatch") is not None else None,
+            dispatch_target=str(raw["dispatch_target"]) if raw.get("dispatch_target") is not None else None,
         )
 
 
@@ -42,11 +48,19 @@ class BridgeFunctionSpec:
 class BridgeSpec:
     module: str
     functions: list[BridgeFunctionSpec]
+    default_dispatch: str = "default"
+    captured_types: dict[str, dict[str, Any]] = field(default_factory=dict)
+    extra_imports: list[str] = field(default_factory=list)
+    custom_client_code: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "module": self.module,
             "functions": [fn.to_dict() for fn in self.functions],
+            "default_dispatch": self.default_dispatch,
+            "captured_types": self.captured_types,
+            "extra_imports": self.extra_imports,
+            "custom_client_code": self.custom_client_code,
         }
 
     def write_json(self, path: str | Path) -> None:
@@ -58,6 +72,10 @@ class BridgeSpec:
         return cls(
             module=raw["module"],
             functions=[BridgeFunctionSpec.from_dict(fn) for fn in raw["functions"]],
+            default_dispatch=str(raw.get("default_dispatch", "default")),
+            captured_types=raw.get("captured_types", {}),
+            extra_imports=raw.get("extra_imports", []),
+            custom_client_code=raw.get("custom_client_code"),
         )
 
     @classmethod
