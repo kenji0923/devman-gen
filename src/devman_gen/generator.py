@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from pprint import pformat
+import shutil
 
 from .spec import BridgeSpec
 
@@ -32,7 +33,7 @@ def _client_source(spec: BridgeSpec) -> str:
     lines.append("import re")
     lines.append("from typing import Any")
     lines.append("")
-    lines.append("from devman_gen.runtime.client import ManagerClient")
+    lines.append("from .runtime.client import ManagerClient")
     lines.append("")
 
     lines.append("try:")
@@ -277,7 +278,7 @@ def _server_source(spec: BridgeSpec) -> str:
     lines.append("from datetime import datetime")
     lines.append("import os")
     lines.append("")
-    lines.append("import devman_gen.runtime.server as runtime_server")
+    lines.append("from .runtime import server as runtime_server")
     lines.append("")
     lines.append("RuntimeFunctionSpec = runtime_server.RuntimeFunctionSpec")
     lines.append("serve_manager = runtime_server.serve_manager")
@@ -409,5 +410,10 @@ def generate_bridge_package(spec: BridgeSpec, output_dir: str | Path, package_na
     (package_dir / "client.py").write_text(_client_source(spec), encoding="utf-8")
     (package_dir / "server.py").write_text(_server_source(spec), encoding="utf-8")
     (package_dir / "spec.json").write_text(json.dumps(spec.to_dict(), indent=2) + "\n", encoding="utf-8")
+    runtime_src = Path(__file__).resolve().parent / "runtime"
+    runtime_dst = package_dir / "runtime"
+    runtime_dst.mkdir(parents=True, exist_ok=True)
+    for file_path in runtime_src.glob("*.py"):
+        shutil.copyfile(file_path, runtime_dst / file_path.name)
 
     return package_dir

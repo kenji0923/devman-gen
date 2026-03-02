@@ -219,6 +219,32 @@ def test_generated_client_supports_none_templates(tmp_path) -> None:
         sys.path.pop(0)
 
 
+def test_generated_package_vendors_runtime(tmp_path) -> None:
+    spec = BridgeSpec(
+        module="backend_mod",
+        functions=[
+            BridgeFunctionSpec(
+                name="ping",
+                signature="()",
+                param_order=[],
+                param_kinds={},
+                resource_template=None,
+            )
+        ],
+    )
+    package_root = tmp_path / "out"
+    package_name = "generated_bridge_runtime"
+    package_dir = generate_bridge_package(spec, package_root, package_name)
+
+    client_text = (package_dir / "client.py").read_text(encoding="utf-8")
+    server_text = (package_dir / "server.py").read_text(encoding="utf-8")
+    assert "from .runtime.client import ManagerClient" in client_text
+    assert "from .runtime import server as runtime_server" in server_text
+    assert (package_dir / "runtime" / "__init__.py").exists()
+    assert (package_dir / "runtime" / "client.py").exists()
+    assert (package_dir / "runtime" / "server.py").exists()
+
+
 def test_generated_client_expands_list_placeholders_in_resource_template(tmp_path) -> None:
     spec = BridgeSpec(
         module="backend_mod",
