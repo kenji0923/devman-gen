@@ -1,6 +1,6 @@
 # devman-gen
 
-`devman-gen` generates a managed client/server bridge for Python hardware-control libraries.
+`devman-gen` generates managed client/server bridge packages for Python hardware-control libraries.
 
 ## What it provides
 
@@ -9,6 +9,7 @@
 - SQLite-backed ownership tracking (`acquire` / `release`).
 - Client/server session handshake with duplicate-name protection.
 - Generator CLI that can build from live module introspection or a JSON spec.
+- Split standalone output: separate installable client and server packages.
 
 ## Quick start
 
@@ -20,15 +21,30 @@ pip install -e .
 # Create a spec from an installed module
 devman-gen introspect --module some_library --output spec.json
 
-# Generate a bridge package
-devman-gen generate --spec spec.json --output ./generated_bridge --package-name my_bridge
+# Generate split bridge packages
+devman-gen generate --spec spec.json --output ./generated_bridge --package-name my-bridge
+# output:
+#   generated_bridge/my-bridge-client
+#   generated_bridge/my-bridge-server
 ```
 
-Use generated package:
+Install client machine:
+
+```bash
+pip install ./generated_bridge/my-bridge-client
+```
+
+Install server machine:
+
+```bash
+pip install ./generated_bridge/my-bridge-server
+```
+
+Use generated client package:
 
 ```python
 import os
-from my_bridge.client import configure, connect, disconnect, acquire, release
+from my_bridge_client.client import configure, connect, disconnect, acquire, release
 
 os.environ["DEVMAN_CLIENT"] = "alice"  # required
 connect()
@@ -38,19 +54,13 @@ release("channel:0")
 disconnect()
 ```
 
-Start manager:
+Start manager from server package:
 
 ```bash
-python -m my_bridge.server --backend-module some_library --host 127.0.0.1 --port 50250 --db ./ownership.db
+python -m my_bridge_server.server --backend-module some_library --host 127.0.0.1 --port 50250 --db ./ownership.db
+# or script entrypoint (same args):
+# my_bridge_server --backend-module some_library ...
 ```
-
-Enable verbose request logging:
-
-```bash
-python -m my_bridge.server --backend-module some_library --verbose
-```
-
-Verbose mode logs request origin (`client`) and command payload (operation, function, args/kwargs/resources).
 
 ## Session and client identity
 
@@ -83,7 +93,7 @@ If no explicit singleton provider is configured, the return value of `init` is u
 Example:
 
 ```bash
-python -m my_bridge.server \
+python -m my_bridge_server.server \
   --backend-module some_library \
   --init-file ./hooks.py \
   --deinit-file ./hooks.py \
@@ -109,8 +119,6 @@ Equivalent environment variables:
 
 `--init-file` and `--init-function` are mutually exclusive (same for deinit).
 `--singleton-file` and `--singleton-function` are mutually exclusive.
-
-`username/password` are no longer dedicated server flags. Provide them via `--hook-arg username=... --hook-arg password=...` (or your own key names) and handle them inside init/deinit logic.
 
 ## Spec format
 

@@ -16,3 +16,4 @@ src/devman_gen/runtime/db.py
 src/devman_gen/runtime/protocol.py
 src/devman_gen/runtime/server.py
 tests/test_generator.py
+tests/test_protocol.py

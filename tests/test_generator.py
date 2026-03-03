@@ -5,7 +5,7 @@ import inspect
 import os
 import sys
 
-from devman_gen.generator import generate_bridge_package
+from devman_gen.generator import generate_bridge_packages
 from devman_gen.introspect import build_spec_from_module
 from devman_gen.runtime.client import ManagerClient
 from devman_gen.runtime.server import (
@@ -18,6 +18,24 @@ from devman_gen.runtime.server import (
 from devman_gen.spec import BridgeFunctionSpec, BridgeSpec
 
 os.environ.setdefault("DEVMAN_CLIENT", "test-client")
+
+
+def _generate(spec: BridgeSpec, root, base: str):
+    out = generate_bridge_packages(spec, root, base)
+    client_module = f"{base}_client"
+    server_module = f"{base}_server"
+    client_project = out["client"]
+    server_project = out["server"]
+    return {
+        "client_module": client_module,
+        "server_module": server_module,
+        "client_project": client_project,
+        "server_project": server_project,
+        "client_src": client_project / "src",
+        "server_src": server_project / "src",
+        "client_pkg": client_project / "src" / client_module,
+        "server_pkg": server_project / "src" / server_module,
+    }
 
 
 def _connect(core: ManagerCore, name: str) -> str:
@@ -104,12 +122,10 @@ def test_generated_client_preserves_signature_and_packaging(tmp_path) -> None:
     )
 
     package_root = tmp_path / "out"
-    package_name = "generated_bridge"
-    generate_bridge_package(spec, package_root, package_name)
-
-    sys.path.insert(0, str(package_root))
+    generated = _generate(spec, package_root, "generated_bridge")
+    sys.path.insert(0, str(generated["client_src"]))
     try:
-        client = importlib.import_module(f"{package_name}.client")
+        client = importlib.import_module(f"{generated['client_module']}.client")
         assert str(inspect.signature(client.configure)) == "(channel, voltage=0.0, *, ramp=False, **kwargs)"
 
         captured: dict[str, object] = {}
@@ -154,10 +170,8 @@ def test_generated_server_supports_arbitrary_hook_args(tmp_path) -> None:
         ],
     )
     package_root = tmp_path / "out"
-    package_name = "generated_bridge_server_args"
-    generate_bridge_package(spec, package_root, package_name)
-
-    server_text = (package_root / package_name / "server.py").read_text(encoding="utf-8")
+    generated = _generate(spec, package_root, "generated_bridge_server_args")
+    server_text = (generated["server_pkg"] / "server.py").read_text(encoding="utf-8")
     assert "parse_known_args" in server_text
     assert "--hook-arg" in server_text
     assert "hook_args=hook_options" in server_text
@@ -187,9 +201,8 @@ def test_default_dispatch_applies_when_function_dispatch_omitted(tmp_path) -> No
         ],
     )
     package_root = tmp_path / "out"
-    package_name = "generated_bridge_default_dispatch"
-    generate_bridge_package(spec, package_root, package_name)
-    server_text = (package_root / package_name / "server.py").read_text(encoding="utf-8")
+    generated = _generate(spec, package_root, "generated_bridge_default_dispatch")
+    server_text = (generated["server_pkg"] / "server.py").read_text(encoding="utf-8")
     assert "'dispatch': 'singleton'" in server_text
 
 
@@ -208,12 +221,10 @@ def test_generated_client_supports_none_templates(tmp_path) -> None:
     )
 
     package_root = tmp_path / "out"
-    package_name = "generated_bridge_none"
-    generate_bridge_package(spec, package_root, package_name)
-
-    sys.path.insert(0, str(package_root))
+    generated = _generate(spec, package_root, "generated_bridge_none")
+    sys.path.insert(0, str(generated["client_src"]))
     try:
-        client = importlib.import_module(f"{package_name}.client")
+        client = importlib.import_module(f"{generated['client_module']}.client")
         assert hasattr(client, "ping")
     finally:
         sys.path.pop(0)
@@ -233,16 +244,37 @@ def test_generated_package_vendors_runtime(tmp_path) -> None:
         ],
     )
     package_root = tmp_path / "out"
-    package_name = "generated_bridge_runtime"
-    package_dir = generate_bridge_package(spec, package_root, package_name)
+    generated = _generate(spec, package_root, "generated_bridge_runtime")
 
-    client_text = (package_dir / "client.py").read_text(encoding="utf-8")
-    server_text = (package_dir / "server.py").read_text(encoding="utf-8")
+    client_text = (generated["client_pkg"] / "client.py").read_text(encoding="utf-8")
+    server_text = (generated["server_pkg"] / "server.py").read_text(encoding="utf-8")
     assert "from .runtime.client import ManagerClient" in client_text
     assert "from .runtime import server as runtime_server" in server_text
-    assert (package_dir / "runtime" / "__init__.py").exists()
-    assert (package_dir / "runtime" / "client.py").exists()
-    assert (package_dir / "runtime" / "server.py").exists()
+    assert (generated["client_pkg"] / "runtime" / "__init__.py").exists()
+    assert (generated["client_pkg"] / "runtime" / "client.py").exists()
+    assert (generated["server_pkg"] / "runtime" / "server.py").exists()
+
+
+def test_generate_uses_hyphen_project_and_underscore_module_names(tmp_path) -> None:
+    spec = BridgeSpec(
+        module="backend_mod",
+        functions=[
+            BridgeFunctionSpec(
+                name="ping",
+                signature="()",
+                param_order=[],
+                param_kinds={},
+                resource_template=None,
+            )
+        ],
+    )
+    root = tmp_path / "out"
+    out = generate_bridge_packages(spec, root, "my-bridge")
+
+    assert out["client"].name == "my-bridge-client"
+    assert out["server"].name == "my-bridge-server"
+    assert (out["client"] / "src" / "my_bridge_client").exists()
+    assert (out["server"] / "src" / "my_bridge_server").exists()
 
 
 def test_generated_client_expands_list_placeholders_in_resource_template(tmp_path) -> None:
@@ -264,12 +296,10 @@ def test_generated_client_expands_list_placeholders_in_resource_template(tmp_pat
     )
 
     package_root = tmp_path / "out"
-    package_name = "generated_bridge_expand_lock"
-    generate_bridge_package(spec, package_root, package_name)
-
-    sys.path.insert(0, str(package_root))
+    generated = _generate(spec, package_root, "generated_bridge_expand_lock")
+    sys.path.insert(0, str(generated["client_src"]))
     try:
-        client = importlib.import_module(f"{package_name}.client")
+        client = importlib.import_module(f"{generated['client_module']}.client")
         captured: dict[str, object] = {}
 
         class FakeClient:
@@ -327,12 +357,11 @@ def test_introspect_captures_referenced_external_types(tmp_path) -> None:
         assert spec.captured_types["SystemType"]["members"] == {"A": 1}
         assert spec.captured_types["Payload"]["type"] == "Class"
 
-        package_name = "generated_bridge_types"
-        generate_bridge_package(spec, package_root, package_name)
+        generated = _generate(spec, package_root, "generated_bridge_types")
 
         sys.path.pop(0)
-        sys.path.insert(0, str(package_root))
-        client = importlib.import_module(f"{package_name}.client")
+        sys.path.insert(0, str(generated["client_src"]))
+        client = importlib.import_module(f"{generated['client_module']}.client")
         assert client.SystemType.A.name == "A"
         assert hasattr(client, "Payload")
     finally:

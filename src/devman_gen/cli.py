@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .generator import generate_bridge_package
+from .generator import generate_bridge_packages
 from .introspect import build_spec_from_module
 from .spec import BridgeSpec
 
@@ -17,8 +17,9 @@ def _cmd_introspect(args: argparse.Namespace) -> int:
 
 def _cmd_generate(args: argparse.Namespace) -> int:
     spec = BridgeSpec.read_json(args.spec)
-    package_dir = generate_bridge_package(spec=spec, output_dir=args.output, package_name=args.package_name)
-    print(f"generated bridge package at {package_dir}")
+    out = generate_bridge_packages(spec=spec, output_dir=args.output, package_name=args.package_name)
+    print(f"generated client package at {out['client']}")
+    print(f"generated server package at {out['server']}")
     return 0
 
 
@@ -31,10 +32,14 @@ def build_parser() -> argparse.ArgumentParser:
     introspect.add_argument("--output", required=True, help="Output JSON spec path")
     introspect.set_defaults(func=_cmd_introspect)
 
-    generate = sub.add_parser("generate", help="generate bridge package from spec")
+    generate = sub.add_parser("generate", help="generate split client/server packages from spec")
     generate.add_argument("--spec", required=True, help="Input JSON spec path")
     generate.add_argument("--output", required=True, help="Output directory")
-    generate.add_argument("--package-name", required=True, help="Generated Python package name")
+    generate.add_argument(
+        "--package-name",
+        required=True,
+        help="Base package name (project dirs: <name>-client, <name>-server; Python modules use underscores)",
+    )
     generate.set_defaults(func=_cmd_generate)
 
     return parser

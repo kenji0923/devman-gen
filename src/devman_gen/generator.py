@@ -15,11 +15,17 @@ def _prepend_param(signature: str, name: str) -> str:
     return f"({name}, {inner})"
 
 
+def _clean_signature(signature: str) -> str:
+    sig = signature
+    if "->" in sig:
+        sig = sig.split("->")[0].strip()
+    return sig
+
+
 def _client_source(spec: BridgeSpec) -> str:
     param_order = {fn.name: fn.param_order for fn in spec.functions}
     param_kinds = {fn.name: fn.param_kinds for fn in spec.functions}
     resource_templates = {fn.name: fn.resource_template for fn in spec.functions}
-
     device_functions = {
         fn.name[len("Device_") :]: fn for fn in spec.functions if fn.name.startswith("Device_")
     }
@@ -29,7 +35,6 @@ def _client_source(spec: BridgeSpec) -> str:
     lines.append("")
     lines.append("import itertools")
     lines.append("import os")
-    lines.append("import sys")
     lines.append("import re")
     lines.append("from typing import Any")
     lines.append("")
@@ -42,7 +47,6 @@ def _client_source(spec: BridgeSpec) -> str:
         lines.append(f"    from {extra} import *")
     lines.append("except Exception:")
     if spec.captured_types:
-        lines.append("    # Fallback for machines without the backend library")
         lines.append("    from enum import Enum, IntEnum")
         for type_name, type_info in spec.captured_types.items():
             if type_name in ("Enum", "IntEnum"):
@@ -70,65 +74,55 @@ def _client_source(spec: BridgeSpec) -> str:
     lines.append(f"_RESOURCE_TEMPLATES = {pformat(resource_templates, indent=2, sort_dicts=True)}")
     lines.append("")
     lines.append("def _default_client_name() -> str:")
-    lines.append("    name = os.getenv(\"DEVMAN_CLIENT\")")
+    lines.append("    name = os.getenv('DEVMAN_CLIENT')")
     lines.append("    if name is None or not str(name).strip():")
-    lines.append("        raise RuntimeError(\"DEVMAN_CLIENT is required\")")
+    lines.append("        raise RuntimeError('DEVMAN_CLIENT is required')")
     lines.append("    return str(name).strip()")
     lines.append("")
     lines.append("_CLIENT = ManagerClient(")
-    lines.append("    host=os.getenv(\"DEVMAN_HOST\", \"127.0.0.1\"),")
-    lines.append("    port=int(os.getenv(\"DEVMAN_PORT\", \"50250\")),")
+    lines.append("    host=os.getenv('DEVMAN_HOST', '127.0.0.1'),")
+    lines.append("    port=int(os.getenv('DEVMAN_PORT', '50250')),")
     lines.append("    client_name=_default_client_name(),")
     lines.append(")")
     lines.append("")
-    lines.append("")
+
     lines.append("def configure_connection(host: str, port: int, client_name: str, timeout: float = 5.0) -> None:")
     lines.append("    global _CLIENT")
     lines.append("    _CLIENT = ManagerClient(host=host, port=port, client_name=client_name, timeout=timeout)")
     lines.append("")
-    lines.append("")
     lines.append("def acquire(resource: str) -> bool:")
     lines.append("    return _CLIENT.acquire(resource)")
-    lines.append("")
     lines.append("")
     lines.append("def release(resource: str) -> bool:")
     lines.append("    return _CLIENT.release(resource)")
     lines.append("")
-    lines.append("")
     lines.append("def owner_of(resource: str) -> str | None:")
     lines.append("    return _CLIENT.owner_of(resource)")
-    lines.append("")
     lines.append("")
     lines.append("def owners_of(resources: list[str]) -> dict[str, str | None]:")
     lines.append("    return _CLIENT.owners_of(resources)")
     lines.append("")
-    lines.append("")
     lines.append("def connect(force: bool = False) -> None:")
     lines.append("    _CLIENT.connect(force=force)")
-    lines.append("")
     lines.append("")
     lines.append("def disconnect() -> None:")
     lines.append("    _CLIENT.disconnect()")
     lines.append("")
-    lines.append("")
     lines.append("def close() -> None:")
     lines.append("    _CLIENT.close()")
     lines.append("")
-    lines.append("")
-    lines.append("_EXPAND_FIELD_RE = re.compile(r\"\\{([A-Za-z_]\\w*)\\[\\]\\}\")")
-    lines.append("")
+
+    lines.append("_EXPAND_FIELD_RE = re.compile(r'\\{([A-Za-z_]\\w*)\\[\\]\\}')")
     lines.append("")
     lines.append("def _expand_resource_template(template: str, context: dict[str, Any]) -> list[str]:")
     lines.append("    expand_fields = _EXPAND_FIELD_RE.findall(template)")
     lines.append("    if not expand_fields:")
     lines.append("        return [template.format(**context)]")
-    lines.append("")
-    lines.append("    # Keep first-seen order while de-duplicating field names.")
     lines.append("    ordered_fields = list(dict.fromkeys(expand_fields))")
     lines.append("    normalized = template")
     lines.append("    values_by_field: list[list[Any]] = []")
     lines.append("    for field in ordered_fields:")
-    lines.append("        normalized = normalized.replace(f\"{{{field}[]}}\", f\"{{{field}}}\")")
+    lines.append("        normalized = normalized.replace(f'{{{field}[]}}', f'{{{field}}}')")
     lines.append("        raw = context.get(field)")
     lines.append("        if raw is None:")
     lines.append("            return []")
@@ -142,7 +136,6 @@ def _client_source(spec: BridgeSpec) -> str:
     lines.append("        if not values:")
     lines.append("            return []")
     lines.append("        values_by_field.append(values)")
-    lines.append("")
     lines.append("    resources: list[str] = []")
     lines.append("    for combo in itertools.product(*values_by_field):")
     lines.append("        local_context = dict(context)")
@@ -151,7 +144,7 @@ def _client_source(spec: BridgeSpec) -> str:
     lines.append("        resources.append(normalized.format(**local_context))")
     lines.append("    return resources")
     lines.append("")
-    lines.append("")
+
     lines.append("def _pack_call_args(function: str, local_vars: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:")
     lines.append("    order = _PARAM_ORDER[function]")
     lines.append("    kinds = _PARAM_KINDS[function]")
@@ -172,7 +165,7 @@ def _client_source(spec: BridgeSpec) -> str:
     lines.append("            args.append(value)")
     lines.append("    return args, kwargs")
     lines.append("")
-    lines.append("")
+
     lines.append("def _resources_for(function: str, local_vars: dict[str, Any]) -> list[str]:")
     lines.append("    context = dict(local_vars)")
     lines.append("    context.pop('kwargs', None)")
@@ -180,23 +173,17 @@ def _client_source(spec: BridgeSpec) -> str:
     lines.append("    if not template:")
     lines.append("        return []")
     lines.append("    return _expand_resource_template(template, context)")
-    lines.append("")
 
     for fn in spec.functions:
-        sig = fn.signature
-        if "->" in sig:
-            sig = sig.split("->")[0].strip() + ":"
-        else:
-            sig = sig.strip() + ":"
+        sig = _clean_signature(fn.signature)
         lines.append("")
-        lines.append(f"def {fn.name}{sig}")
+        lines.append(f"def {fn.name}{sig}:")
         lines.append("    _locals = locals()")
-        lines.append(f"    _args, _kwargs = _pack_call_args(\"{fn.name}\", _locals)")
-        lines.append(f"    _resources = _resources_for(\"{fn.name}\", _locals)")
-        lines.append(f"    return _CLIENT.invoke(\"{fn.name}\", _args, _kwargs, _resources)")
+        lines.append(f"    _args, _kwargs = _pack_call_args('{fn.name}', _locals)")
+        lines.append(f"    _resources = _resources_for('{fn.name}', _locals)")
+        lines.append(f"    return _CLIENT.invoke('{fn.name}', _args, _kwargs, _resources)")
 
     if device_functions:
-        lines.append("")
         lines.append("")
         lines.append("class Device:")
         lines.append("    def __init__(self, handle: str) -> None:")
@@ -204,16 +191,9 @@ def _client_source(spec: BridgeSpec) -> str:
 
         if "open" in device_functions:
             open_fn = device_functions["open"]
-            # Clean up signature (remove return type annotation if it has ~_ or other invalid parts)
-            sig = open_fn.signature
-            if "->" in sig:
-                sig = sig.split("->")[0].strip() + ":"
-            else:
-                sig = sig.strip() + ":"
-
             lines.append("")
             lines.append("    @classmethod")
-            lines.append(f"    def open{_prepend_param(sig.strip(':'), 'cls')}:")
+            lines.append(f"    def open{_prepend_param(_clean_signature(open_fn.signature), 'cls')}:")
             lines.append("        _locals = locals()")
             lines.append("        _args, _kwargs = _pack_call_args('Device_open', _locals)")
             lines.append("        _resources = _resources_for('Device_open', _locals)")
@@ -225,14 +205,8 @@ def _client_source(spec: BridgeSpec) -> str:
         for method_name, fn in sorted(device_functions.items()):
             if method_name == "open":
                 continue
-            sig = fn.signature
-            if "->" in sig:
-                sig = sig.split("->")[0].strip() + ":"
-            else:
-                sig = sig.strip() + ":"
-
             lines.append("")
-            lines.append(f"    def {method_name}{_prepend_param(sig.strip(':'), 'self')}:")
+            lines.append(f"    def {method_name}{_prepend_param(_clean_signature(fn.signature), 'self')}:")
             lines.append("        _locals = locals()")
             lines.append(f"        _args, _kwargs = _pack_call_args('Device_{method_name}', _locals)")
             lines.append(f"        _resources = _resources_for('Device_{method_name}', _locals)")
@@ -249,7 +223,6 @@ def _client_source(spec: BridgeSpec) -> str:
             lines.append("        self.close()")
 
     if spec.custom_client_code:
-        lines.append("")
         lines.append("")
         lines.append(spec.custom_client_code)
 
@@ -275,7 +248,6 @@ def _server_source(spec: BridgeSpec) -> str:
     lines.append("from __future__ import annotations")
     lines.append("")
     lines.append("import argparse")
-    lines.append("from datetime import datetime")
     lines.append("import os")
     lines.append("")
     lines.append("from .runtime import server as runtime_server")
@@ -284,7 +256,6 @@ def _server_source(spec: BridgeSpec) -> str:
     lines.append("serve_manager = runtime_server.serve_manager")
     lines.append("")
     lines.append(f"FUNCTIONS = {pformat(function_map, indent=2, sort_dicts=True)}")
-    lines.append("")
     lines.append("")
     lines.append("def _runtime_specs() -> dict[str, RuntimeFunctionSpec]:")
     lines.append("    return {")
@@ -299,7 +270,6 @@ def _server_source(spec: BridgeSpec) -> str:
     lines.append("        for name, data in FUNCTIONS.items()")
     lines.append("    }")
     lines.append("")
-    lines.append("")
     lines.append("def _parse_hook_args(raw_items: list[str]) -> dict[str, str]:")
     lines.append("    result: dict[str, str] = {}")
     lines.append("    for item in raw_items:")
@@ -312,28 +282,11 @@ def _server_source(spec: BridgeSpec) -> str:
     lines.append("        result[key] = value")
     lines.append("    return result")
     lines.append("")
-    lines.append("")
     lines.append("def _env_flag(name: str, default: bool = False) -> bool:")
     lines.append("    raw = os.getenv(name)")
     lines.append("    if raw is None:")
     lines.append("        return default")
     lines.append("    return str(raw).strip().lower() in ('1', 'true', 'yes', 'on')")
-    lines.append("")
-    lines.append("")
-    lines.append("def _patch_runtime_timestamped_verbose_logs() -> None:")
-    lines.append("    current = getattr(runtime_server.ManagerCore, '_log', None)")
-    lines.append("    if current is None:")
-    lines.append("        return")
-    lines.append("    if getattr(current, '__name__', '') == '_log_with_timestamp':")
-    lines.append("        return")
-    lines.append("")
-    lines.append("    def _log_with_timestamp(self, message: str) -> None:")
-    lines.append("        if self.verbose:")
-    lines.append("            ts = datetime.now().isoformat(timespec='seconds')")
-    lines.append("            print(f\"[devman {ts}] {message}\", file=sys.stderr, flush=True)")
-    lines.append("")
-    lines.append("    runtime_server.ManagerCore._log = _log_with_timestamp")
-    lines.append("")
     lines.append("")
     lines.append("def main() -> None:")
     lines.append("    parser = argparse.ArgumentParser(description='Run devman manager server')")
@@ -361,14 +314,10 @@ def _server_source(spec: BridgeSpec) -> str:
     lines.append("        parser.error('--deinit-file and --deinit-function are mutually exclusive')")
     lines.append("    if args.singleton_file and args.singleton_function:")
     lines.append("        parser.error('--singleton-file and --singleton-function are mutually exclusive')")
-    lines.append("")
     lines.append("    try:")
     lines.append("        hook_options = _parse_hook_args(list(args.hook_arg))")
     lines.append("    except ValueError as exc:")
     lines.append("        parser.error(str(exc))")
-    lines.append("")
-    lines.append("    _patch_runtime_timestamped_verbose_logs()")
-    lines.append("")
     lines.append("    serve_manager(")
     lines.append("        backend_module=args.backend_module,")
     lines.append("        host=args.host,")
@@ -389,31 +338,101 @@ def _server_source(spec: BridgeSpec) -> str:
     lines.append("        verbose=bool(args.verbose),")
     lines.append("    )")
     lines.append("")
-    lines.append("")
     lines.append("if __name__ == '__main__':")
     lines.append("    main()")
     lines.append("")
     return "\n".join(lines)
 
 
-def generate_bridge_package(spec: BridgeSpec, output_dir: str | Path, package_name: str) -> Path:
-    root = Path(output_dir)
-    package_dir = root / package_name
-    package_dir.mkdir(parents=True, exist_ok=True)
+def _project_toml(project_name: str, module_name: str, script_target: str | None = None) -> str:
+    lines = [
+        "[build-system]",
+        "requires = ['setuptools>=68', 'wheel']",
+        "build-backend = 'setuptools.build_meta'",
+        "",
+        "[project]",
+        f"name = '{project_name}'",
+        "version = '0.1.0'",
+        f"description = 'Generated devman package: {module_name}'",
+        "readme = 'README.md'",
+        "requires-python = '>=3.10'",
+        "dependencies = []",
+        "",
+    ]
+    if script_target is not None:
+        lines.extend(
+            [
+                "[project.scripts]",
+                f"{module_name} = '{script_target}'",
+                "",
+            ]
+        )
 
-    (package_dir / "__init__.py").write_text(
-        "from .client import *\n"
-        "\n"
-        "__all__ = [name for name in globals() if not name.startswith('_')]\n",
-        encoding="utf-8",
+    lines.extend(
+        [
+            "[tool.setuptools]",
+            "package-dir = {'': 'src'}",
+            "",
+            "[tool.setuptools.packages.find]",
+            "where = ['src']",
+            "",
+        ]
     )
-    (package_dir / "client.py").write_text(_client_source(spec), encoding="utf-8")
-    (package_dir / "server.py").write_text(_server_source(spec), encoding="utf-8")
-    (package_dir / "spec.json").write_text(json.dumps(spec.to_dict(), indent=2) + "\n", encoding="utf-8")
+    return "\n".join(lines)
+
+
+def _write_runtime(runtime_dst: Path) -> None:
     runtime_src = Path(__file__).resolve().parent / "runtime"
-    runtime_dst = package_dir / "runtime"
     runtime_dst.mkdir(parents=True, exist_ok=True)
     for file_path in runtime_src.glob("*.py"):
         shutil.copyfile(file_path, runtime_dst / file_path.name)
 
-    return package_dir
+
+def _write_project_files(project_dir: Path, module_name: str, entry_script: str | None = None) -> None:
+    src_pkg = project_dir / "src" / module_name
+    src_pkg.mkdir(parents=True, exist_ok=True)
+    (project_dir / "README.md").write_text(
+        f"# {module_name}\n\nGenerated by devman-gen.\n", encoding="utf-8"
+    )
+    (project_dir / "pyproject.toml").write_text(
+        _project_toml(project_name=project_dir.name, module_name=module_name, script_target=entry_script),
+        encoding="utf-8",
+    )
+    _write_runtime(src_pkg / "runtime")
+
+
+def generate_bridge_packages(spec: BridgeSpec, output_dir: str | Path, package_name: str) -> dict[str, Path]:
+    root = Path(output_dir)
+    module_base = package_name.replace("-", "_")
+    client_module = f"{module_base}_client"
+    server_module = f"{module_base}_server"
+    client_project_name = f"{package_name}-client"
+    server_project_name = f"{package_name}-server"
+
+    client_project = root / client_project_name
+    server_project = root / server_project_name
+
+    _write_project_files(client_project, module_name=client_module)
+    _write_project_files(
+        server_project,
+        module_name=server_module,
+        entry_script=f"{server_module}.server:main",
+    )
+
+    client_pkg = client_project / "src" / client_module
+    server_pkg = server_project / "src" / server_module
+
+    (client_pkg / "__init__.py").write_text(
+        "from .client import *\n\n__all__ = [name for name in globals() if not name.startswith('_')]\n",
+        encoding="utf-8",
+    )
+    (server_pkg / "__init__.py").write_text("", encoding="utf-8")
+
+    (client_pkg / "client.py").write_text(_client_source(spec), encoding="utf-8")
+    (server_pkg / "server.py").write_text(_server_source(spec), encoding="utf-8")
+
+    spec_json = json.dumps(spec.to_dict(), indent=2) + "\n"
+    (client_pkg / "spec.json").write_text(spec_json, encoding="utf-8")
+    (server_pkg / "spec.json").write_text(spec_json, encoding="utf-8")
+
+    return {"client": client_project, "server": server_project}
