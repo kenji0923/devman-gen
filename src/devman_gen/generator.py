@@ -38,7 +38,7 @@ def _client_source(spec: BridgeSpec) -> str:
     lines.append("import re")
     lines.append("from typing import Any")
     lines.append("")
-    lines.append("from .runtime.client import ManagerClient")
+    lines.append("from devman_runtime.client import ManagerClient")
     lines.append("")
 
     lines.append("try:")
@@ -101,6 +101,12 @@ def _client_source(spec: BridgeSpec) -> str:
     lines.append("")
     lines.append("def owners_of(resources: list[str]) -> dict[str, str | None]:")
     lines.append("    return _CLIENT.owners_of(resources)")
+    lines.append("")
+    lines.append("def set_link_groups(groups: list[list[str]]) -> int:")
+    lines.append("    return _CLIENT.set_link_groups(groups)")
+    lines.append("")
+    lines.append("def list_link_groups() -> dict[str, list[list[str]]]:")
+    lines.append("    return _CLIENT.list_link_groups()")
     lines.append("")
     lines.append("def connect(force: bool = False) -> None:")
     lines.append("    _CLIENT.connect(force=force)")
@@ -250,7 +256,7 @@ def _server_source(spec: BridgeSpec) -> str:
     lines.append("import argparse")
     lines.append("import os")
     lines.append("")
-    lines.append("from .runtime import server as runtime_server")
+    lines.append("from devman_runtime import server as runtime_server")
     lines.append("")
     lines.append("RuntimeFunctionSpec = runtime_server.RuntimeFunctionSpec")
     lines.append("serve_manager = runtime_server.serve_manager")
@@ -305,6 +311,12 @@ def _server_source(spec: BridgeSpec) -> str:
     lines.append("    parser.add_argument('--singleton-file', default=os.getenv('DEVMAN_SINGLETON_FILE', ''))")
     lines.append("    parser.add_argument('--singleton-file-function', default=os.getenv('DEVMAN_SINGLETON_FILE_FUNCTION', 'get_singleton'))")
     lines.append("    parser.add_argument('--hook-arg', action='append', default=[], help='key=value pair passed to hooks (repeatable)')")
+    lines.append("    parser.add_argument('--periodic-function', default=os.getenv('DEVMAN_PERIODIC_FUNCTION', ''))")
+    lines.append("    parser.add_argument('--periodic-file', default=os.getenv('DEVMAN_PERIODIC_FILE', ''))")
+    lines.append("    parser.add_argument('--periodic-file-function', default=os.getenv('DEVMAN_PERIODIC_FILE_FUNCTION', 'periodic'))")
+    lines.append("    parser.add_argument('--periodic-interval-sec', type=float, default=float(os.getenv('DEVMAN_PERIODIC_INTERVAL_SEC', '0')))")
+    lines.append("    parser.add_argument('--trip-watchdog-interval', type=float, default=float(os.getenv('DEVMAN_TRIP_WATCHDOG_INTERVAL', '0')), help='poll interval in seconds for the link-group trip watchdog (0 disables)')")
+    lines.append("    parser.add_argument('--client-lease-sec', type=float, default=float(os.getenv('DEVMAN_CLIENT_LEASE_SEC', '90')), help='seconds without any request before a client counts as offline for the link-group janitor (0 = never)')")
     lines.append("    args, extra_args = parser.parse_known_args()")
     lines.append("    if not args.backend_module:")
     lines.append("        parser.error('--backend-module or DEVMAN_BACKEND_MODULE is required')")
@@ -314,6 +326,8 @@ def _server_source(spec: BridgeSpec) -> str:
     lines.append("        parser.error('--deinit-file and --deinit-function are mutually exclusive')")
     lines.append("    if args.singleton_file and args.singleton_function:")
     lines.append("        parser.error('--singleton-file and --singleton-function are mutually exclusive')")
+    lines.append("    if args.periodic_file and args.periodic_function:")
+    lines.append("        parser.error('--periodic-file and --periodic-function are mutually exclusive')")
     lines.append("    try:")
     lines.append("        hook_options = _parse_hook_args(list(args.hook_arg))")
     lines.append("    except ValueError as exc:")
@@ -332,10 +346,16 @@ def _server_source(spec: BridgeSpec) -> str:
     lines.append("        deinit_file_function=args.deinit_file_function,")
     lines.append("        hook_args=hook_options,")
     lines.append("        extra_args=list(extra_args),")
+    lines.append("        periodic_function=args.periodic_function or None,")
+    lines.append("        periodic_file=args.periodic_file or None,")
+    lines.append("        periodic_file_function=args.periodic_file_function,")
+    lines.append("        periodic_interval_sec=float(args.periodic_interval_sec),")
     lines.append("        singleton_function=args.singleton_function or None,")
     lines.append("        singleton_file=args.singleton_file or None,")
     lines.append("        singleton_file_function=args.singleton_file_function,")
     lines.append("        verbose=bool(args.verbose),")
+    lines.append("        trip_watchdog_interval=float(args.trip_watchdog_interval),")
+    lines.append("        client_lease_sec=float(args.client_lease_sec),")
     lines.append("    )")
     lines.append("")
     lines.append("if __name__ == '__main__':")
@@ -356,7 +376,7 @@ def _project_toml(project_name: str, module_name: str, script_target: str | None
         f"description = 'Generated devman package: {module_name}'",
         "readme = 'README.md'",
         "requires-python = '>=3.10'",
-        "dependencies = []",
+        "dependencies = ['devman-runtime>=0.1.0']",
         "",
     ]
     if script_target is not None:
@@ -371,7 +391,7 @@ def _project_toml(project_name: str, module_name: str, script_target: str | None
     lines.extend(
         [
             "[tool.setuptools]",
-            "package-dir = {'': 'src'}",
+            'package-dir = {"" = "src"}',
             "",
             "[tool.setuptools.packages.find]",
             "where = ['src']",
@@ -381,24 +401,34 @@ def _project_toml(project_name: str, module_name: str, script_target: str | None
     return "\n".join(lines)
 
 
-def _write_runtime(runtime_dst: Path) -> None:
-    runtime_src = Path(__file__).resolve().parent / "runtime"
-    runtime_dst.mkdir(parents=True, exist_ok=True)
-    for file_path in runtime_src.glob("*.py"):
-        shutil.copyfile(file_path, runtime_dst / file_path.name)
-
-
-def _write_project_files(project_dir: Path, module_name: str, entry_script: str | None = None) -> None:
+def _write_project_files(
+    project_dir: Path, module_name: str, role: str, entry_script: str | None = None
+) -> None:
     src_pkg = project_dir / "src" / module_name
     src_pkg.mkdir(parents=True, exist_ok=True)
-    (project_dir / "README.md").write_text(
-        f"# {module_name}\n\nGenerated by devman-gen.\n", encoding="utf-8"
-    )
-    (project_dir / "pyproject.toml").write_text(
-        _project_toml(project_name=project_dir.name, module_name=module_name, script_target=entry_script),
-        encoding="utf-8",
-    )
-    _write_runtime(src_pkg / "runtime")
+    # Project metadata is scaffolded once and then owned by the repo:
+    # regeneration must not clobber release metadata (version, license, urls).
+    readme = project_dir / "README.md"
+    if not readme.exists():
+        readme.write_text(
+            f"# {module_name}\n\nGenerated by devman-gen. Runtime is provided by the devman-runtime package.\n",
+            encoding="utf-8",
+        )
+    pyproject = project_dir / "pyproject.toml"
+    if not pyproject.exists():
+        pyproject.write_text(
+            _project_toml(project_name=project_dir.name, module_name=module_name, script_target=entry_script),
+            encoding="utf-8",
+        )
+
+
+def _reset_project_dir(project_dir: Path) -> None:
+    # Only the generated sources are reset; repo-owned files (pyproject,
+    # README, LICENSE, .git*, workflows) are left untouched.
+    src_dir = project_dir / "src"
+    if src_dir.exists():
+        shutil.rmtree(src_dir)
+    project_dir.mkdir(parents=True, exist_ok=True)
 
 
 def generate_bridge_packages(spec: BridgeSpec, output_dir: str | Path, package_name: str) -> dict[str, Path]:
@@ -412,10 +442,14 @@ def generate_bridge_packages(spec: BridgeSpec, output_dir: str | Path, package_n
     client_project = root / client_project_name
     server_project = root / server_project_name
 
-    _write_project_files(client_project, module_name=client_module)
+    _reset_project_dir(client_project)
+    _reset_project_dir(server_project)
+
+    _write_project_files(client_project, module_name=client_module, role="client")
     _write_project_files(
         server_project,
         module_name=server_module,
+        role="server",
         entry_script=f"{server_module}.server:main",
     )
 

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 import json
 
-from devman_gen.runtime.protocol import _json_default
+from devman_runtime.protocol import _json_default
 
 
 class Mode(Enum):

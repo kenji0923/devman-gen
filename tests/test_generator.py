@@ -4,11 +4,12 @@ import importlib
 import inspect
 import os
 import sys
+import tomllib
 
 from devman_gen.generator import generate_bridge_packages
 from devman_gen.introspect import build_spec_from_module
-from devman_gen.runtime.client import ManagerClient
-from devman_gen.runtime.server import (
+from devman_runtime.client import ManagerClient
+from devman_runtime.server import (
     ManagerCore,
     RuntimeFunctionSpec,
     _invoke_hook,
@@ -230,7 +231,7 @@ def test_generated_client_supports_none_templates(tmp_path) -> None:
         sys.path.pop(0)
 
 
-def test_generated_package_vendors_runtime(tmp_path) -> None:
+def test_generated_package_uses_devman_runtime_dependency(tmp_path) -> None:
     spec = BridgeSpec(
         module="backend_mod",
         functions=[
@@ -248,11 +249,48 @@ def test_generated_package_vendors_runtime(tmp_path) -> None:
 
     client_text = (generated["client_pkg"] / "client.py").read_text(encoding="utf-8")
     server_text = (generated["server_pkg"] / "server.py").read_text(encoding="utf-8")
-    assert "from .runtime.client import ManagerClient" in client_text
-    assert "from .runtime import server as runtime_server" in server_text
-    assert (generated["client_pkg"] / "runtime" / "__init__.py").exists()
-    assert (generated["client_pkg"] / "runtime" / "client.py").exists()
-    assert (generated["server_pkg"] / "runtime" / "server.py").exists()
+    assert "from devman_runtime.client import ManagerClient" in client_text
+    assert "from devman_runtime import server as runtime_server" in server_text
+    assert "def set_link_groups" in client_text
+    assert "--trip-watchdog-interval" in server_text
+    assert "--client-lease-sec" in server_text
+    assert not (generated["client_pkg"] / "runtime").exists()
+    assert not (generated["server_pkg"] / "runtime").exists()
+    for project_key in ("client_project", "server_project"):
+        pyproject = tomllib.loads(
+            (generated[project_key] / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        assert "devman-runtime>=0.1.0" in pyproject["project"]["dependencies"]
+
+
+def test_regenerate_preserves_repo_owned_files(tmp_path) -> None:
+    spec = BridgeSpec(
+        module="backend_mod",
+        functions=[
+            BridgeFunctionSpec(
+                name="ping",
+                signature="()",
+                param_order=[],
+                param_kinds={},
+                resource_template=None,
+            )
+        ],
+    )
+    package_root = tmp_path / "out"
+    generated = _generate(spec, package_root, "generated_bridge_keep")
+
+    pyproject = generated["client_project"] / "pyproject.toml"
+    license_file = generated["client_project"] / "LICENSE"
+    pyproject.write_text("# hand-edited metadata\n", encoding="utf-8")
+    license_file.write_text("MIT\n", encoding="utf-8")
+    stray = generated["client_pkg"] / "stale_module.py"
+    stray.write_text("x = 1\n", encoding="utf-8")
+
+    _generate(spec, package_root, "generated_bridge_keep")
+
+    assert pyproject.read_text(encoding="utf-8") == "# hand-edited metadata\n"
+    assert license_file.read_text(encoding="utf-8") == "MIT\n"
+    assert not stray.exists()  # src/ is fully regenerated
 
 
 def test_generate_uses_hyphen_project_and_underscore_module_names(tmp_path) -> None:
@@ -275,6 +313,64 @@ def test_generate_uses_hyphen_project_and_underscore_module_names(tmp_path) -> N
     assert out["server"].name == "my-bridge-server"
     assert (out["client"] / "src" / "my_bridge_client").exists()
     assert (out["server"] / "src" / "my_bridge_server").exists()
+
+
+def test_generated_pyproject_is_valid_toml(tmp_path) -> None:
+    spec = BridgeSpec(
+        module="backend_mod",
+        functions=[
+            BridgeFunctionSpec(
+                name="ping",
+                signature="()",
+                param_order=[],
+                param_kinds={},
+                resource_template=None,
+            )
+        ],
+    )
+    out = generate_bridge_packages(spec, tmp_path / "out", "toml-check")
+    for project in ("client", "server"):
+        pyproject_path = out[project] / "pyproject.toml"
+        data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+        assert "project" in data
+        assert "tool" in data
+
+
+def test_regenerate_preserves_git_related_files(tmp_path) -> None:
+    spec = BridgeSpec(
+        module="backend_mod",
+        functions=[
+            BridgeFunctionSpec(
+                name="ping",
+                signature="()",
+                param_order=[],
+                param_kinds={},
+                resource_template=None,
+            )
+        ],
+    )
+    out_root = tmp_path / "out"
+    out = generate_bridge_packages(spec, out_root, "git-preserve")
+
+    client_project = out["client"]
+    server_project = out["server"]
+    (client_project / ".git").mkdir()
+    (client_project / ".gitignore").write_text("*.pyc\n", encoding="utf-8")
+    (client_project / "stale.txt").write_text("stale\n", encoding="utf-8")
+    (server_project / ".gitmodules").write_text("", encoding="utf-8")
+    (server_project / "obsolete.bin").write_text("x", encoding="utf-8")
+
+    out2 = generate_bridge_packages(spec, out_root, "git-preserve")
+
+    assert (out2["client"] / ".git").exists()
+    assert (out2["client"] / ".gitignore").exists()
+    # Project root is repo-owned space: only src/ is regenerated, so extra
+    # root-level files (LICENSE, workflows, notes) survive regeneration.
+    assert (out2["client"] / "stale.txt").exists()
+    assert (out2["server"] / ".gitmodules").exists()
+    assert (out2["server"] / "obsolete.bin").exists()
+    assert (out2["client"] / "pyproject.toml").exists()
+    assert (out2["server"] / "pyproject.toml").exists()
 
 
 def test_generated_client_expands_list_placeholders_in_resource_template(tmp_path) -> None:
