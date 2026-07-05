@@ -252,7 +252,7 @@ def test_generated_package_uses_devman_runtime_dependency(tmp_path) -> None:
     assert "from devman_runtime.client import ManagerClient" in client_text
     assert "from devman_runtime import server as runtime_server" in server_text
     assert "def set_link_groups" in client_text
-    assert "--trip-watchdog-interval" in server_text
+    assert "--trip-watchdog-interval" not in server_text  # CAEN policy lives in hook files
     assert "--client-lease-sec" in server_text
     assert not (generated["client_pkg"] / "runtime").exists()
     assert not (generated["server_pkg"] / "runtime").exists()
