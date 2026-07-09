@@ -254,6 +254,10 @@ def test_generated_package_uses_devman_runtime_dependency(tmp_path) -> None:
     assert "def set_link_groups" in client_text
     assert "--trip-watchdog-interval" not in server_text  # CAEN policy lives in hook files
     assert "--client-lease-sec" in server_text
+    assert "--cache-poll-interval" in server_text
+    assert "CACHEABLE_FUNCTIONS" in server_text
+    assert "cacheable_functions=set(CACHEABLE_FUNCTIONS)" in server_text
+    assert "def set_fresh" in client_text and "def last_meta" in client_text
     assert "--env-file" in server_text
     assert "_load_env_file" in server_text
     assert not (generated["client_pkg"] / "runtime").exists()
